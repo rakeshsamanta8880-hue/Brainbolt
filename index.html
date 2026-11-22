@@ -118,7 +118,7 @@ async function load() {
       d = await r.json();
       if (!r.ok || (d && d.error)) throw new Error((d && d.error) || "HTTP " + r.status);
     } else d = JSON.parse(store.get(KEY) || "null");
-    if (d) S = { users: d.users || [], questions: (d.questions || []).map(q => ({ ...q, correct: q.correct || [] })), answers: (d.answers || []).filter(a => typeof a.text === "string") };
+    if (d) S = { users: d.users || [], questions: (d.questions || []).map(q => ({ ...q, correct: q.correct || [], opts: q.opts || [] })), answers: (d.answers || []).filter(a => typeof a.text === "string") };
     return true;
   } catch (e) { toast("Could not load data: " + e.message); return false; }
 }
@@ -181,6 +181,9 @@ function quest() {
   return `<div class="grid"><form class="card" onsubmit="addQ(event)"><h2>Ask a question</h2>
     <p class="muted">You do not need to know the answer. Players type their answers, and you choose which ones are correct.</p>
     <label for="qt">Question</label><textarea id="qt" required></textarea>
+    <p class="muted" style="margin-top:14px">Optional: add options if you want players to choose an answer. Leave them empty and players will type their own.</p>
+    ${[0, 1, 2, 3].map(i => `<label for="o${i}">Option ${"ABCD"[i]}</label><input id="o${i}">`).join("")}
+    <label for="qc">Correct option, if you already know it</label><select id="qc"><option value="">I will review the answers myself</option><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select>
     <button class="btn">Publish question</button></form>
     <div>${mine.length ? mine.map(qBlock).join("") : '<div class="card"><p class="muted">You have not asked anything yet. Publish your first question.</p></div>'}</div></div>`;
 }
@@ -188,6 +191,7 @@ function qBlock(q) {
   const as = S.answers.filter(a => a.qid === q.id).sort((a, b) => a.ts - b.ts), c = q.correct || [];
   const good = as.filter(a => c.includes(norm(a.text))).length;
   return `<div class="card"><div class="row" style="border:0;padding-top:0"><h3 style="margin:0">${esc(q.text)}</h3><button class="ghost danger" onclick="delQ('${q.id}')">Delete</button></div>
+    ${(q.opts || []).length ? `<p class="muted">Options: ${q.opts.map((o, i) => "ABCD"[i] + ". " + esc(o)).join(" · ")}</p>` : ""}
     <p class="muted">${as.length} answer${as.length === 1 ? "" : "s"} · ${c.length ? good + " marked correct" : "waiting for your review"}</p>
     ${as.length ? as.map(a => { const on = c.includes(norm(a.text)); return `<div class="row"><span><b>${esc(uname(a.uid))}</b><br><span class="${on ? "okt" : ""}">${esc(a.text)}</span></span><button class="ghost ${on ? "on" : ""}" onclick="mark('${q.id}','${a.uid}')">${on ? "✓ Correct (undo)" : "Mark as correct"}</button></div>`; }).join("") : '<p class="muted" style="margin-top:10px">No answers yet. New answers appear here automatically.</p>'}</div>`;
 }
@@ -207,8 +211,10 @@ function qCard() {
   const q = nextQ();
   if (!q) return `<div class="card"><h3>You are all caught up</h3><p class="muted">No new questions right now. This page checks for new ones automatically.</p></div>`;
   return `<form class="card" onsubmit="submitA(event)"><p class="muted" style="margin-bottom:8px">Question by ${esc(uname(q.by))}</p><div class="q">${esc(q.text)}</div>
-    <input type="hidden" id="aq" value="${q.id}"><label for="ans">Your answer</label><textarea id="ans" required></textarea>
-    <button class="btn">Submit answer</button></form>`;
+    <input type="hidden" id="aq" value="${q.id}">
+    ${(q.opts || []).length
+      ? `<input type="hidden" id="ans">${q.opts.map((o, i) => `<button type="button" class="opt" onclick="pickOpt(${i})"><i>${"ABCD"[i]}</i>${esc(o)}</button>`).join("")}<button class="btn" id="sub" disabled>Submit answer</button>`
+      : `<label for="ans">Your answer</label><textarea id="ans" required></textarea><button class="btn">Submit answer</button>`}</form>`;
 }
 function hist() {
   const m = S.answers.filter(a => a.uid === me.id && qOf(a.qid)).sort((a, b) => b.ts - a.ts);
@@ -263,8 +269,14 @@ async function delUser(id) {
   await save(); render();
 }
 async function addQ(e) {
-  e.preventDefault(); await load();
-  S.questions.push({ id: uid(), by: me.id, text: $("#qt").value.trim(), correct: [], ts: Date.now() });
+  e.preventDefault();
+  const all = [0, 1, 2, 3].map(i => $("#o" + i).value.trim());
+  const opts = all.filter(Boolean), c = $("#qc").value;
+  if (opts.length === 1) return toast("Add at least 2 options, or leave them all empty.");
+  if (c !== "" && !opts.length) return toast("Add your options first, or choose \"I will review the answers myself\".");
+  if (c !== "" && !all[+c]) return toast("The correct option must be one you filled in.");
+  await load();
+  S.questions.push({ id: uid(), by: me.id, text: $("#qt").value.trim(), opts, correct: c !== "" ? [norm(all[+c])] : [], ts: Date.now() });
   await save(); render(); toast("Question published.", true);
 }
 async function mark(qid, u) {
@@ -280,6 +292,12 @@ async function delQ(id) {
   await save(); render();
 }
 function setTab(t) { tab = t; last = false; render(); }
+function pickOpt(i) {
+  const q = qOf($("#aq").value); if (!q) return;
+  $("#ans").value = q.opts[i];
+  document.querySelectorAll(".opt").forEach((el, j) => el.classList.toggle("on", j === i));
+  $("#sub").disabled = false;
+}
 async function submitA(e) {
   e.preventDefault(); if (busy) return;
   const text = $("#ans").value.trim(), qid = $("#aq").value; if (!text) return;
