@@ -137,7 +137,7 @@ const norm = t => String(t || "").trim().toLowerCase().replace(/\s+/g, " ");
 const qOf = id => S.questions.find(q => q.id === id);
 const stat = a => { const q = qOf(a.qid); if (!q) return "gone"; const c = q.correct || []; return !c.length ? "pending" : c.includes(norm(a.text)) ? "ok" : "no"; };
 const points = id => S.answers.filter(a => a.uid === id && stat(a) === "ok").length;
-const nextQ = () => S.questions.find(q => !S.answers.some(a => a.uid === me.id && a.qid === q.id));
+const nextQ = () => S.questions.find(q => q.by !== me.id && !S.answers.some(a => a.uid === me.id && a.qid === q.id));
 const shown = (q, k) => (S.answers.find(a => a.qid === q.id && norm(a.text) === k) || { text: k }).text;
 const uname = id => (S.users.find(u => u.id === id) || { name: "Deleted user" }).name;
 
@@ -145,7 +145,7 @@ const uname = id => (S.users.find(u => u.id === id) || { name: "Deleted user" })
 function render() {
   if (me) me = S.users.find(u => u.id === me.id) || null;
   $("#app").innerHTML = me ? appView() : loginView();
-  if (me && me.role === "player") countUp();
+  if (me && me.role !== "admin") countUp();
 }
 function loginView() {
   return `<div class="login"><form class="card" onsubmit="login(event)">
@@ -156,11 +156,11 @@ function loginView() {
     <button class="btn" style="width:100%">Log in</button></form></div>`;
 }
 function appView() {
-  const body = me.role === "admin" ? admin() : me.role === "questioner" ? quest() : player();
+  const body = me.role === "admin" ? admin() : player();
   return `<header class="top"><div class="logo">⚡ Brainbolt</div><div class="who"><span>${esc(me.name)}</span><b class="chip ${me.role}">${ROLE[me.role]}</b><button class="ghost" onclick="logout()">Log out</button></div></header><main class="wrap">${body}</main>`;
 }
 function board() {
-  const p = S.users.filter(u => u.role === "player").sort((a, b) => points(b.id) - points(a.id));
+  const p = S.users.filter(u => u.role !== "admin").sort((a, b) => points(b.id) - points(a.id));
   return `<div class="card"><h3>Leaderboard</h3>${p.length ? p.map((u, i) => `<div class="row"><span><span class="rank">${i + 1}</span>${esc(u.name)}</span><b>${points(u.id)} pts</b></div>`).join("") : '<p class="muted">No players yet.</p>'}</div>`;
 }
 // Admin
@@ -169,7 +169,7 @@ function admin() {
     <label for="un">Full name</label><input id="un" required>
     <label for="uu">Username</label><input id="uu" required autocomplete="off">
     <label for="up">Password</label><input id="up" type="text" minlength="4" required autocomplete="off">
-    <label for="ur">Role</label><select id="ur"><option value="player">Player (answers questions)</option><option value="questioner">Questioner (creates questions)</option><option value="admin">Admin</option></select>
+    <label for="ur">Role</label><select id="ur"><option value="player">Player (answers questions)</option><option value="questioner">Questioner (asks and answers)</option><option value="admin">Admin</option></select>
     <button class="btn">Create user</button></form>
     <div class="card"><h2>All users (${S.users.length})</h2>${S.users.map(u => `<div class="row"><span>${esc(u.name)}<br><span class="muted">@${esc(u.username)}</span></span>
       <span><select aria-label="Role for ${esc(u.name)}" onchange="setRole('${u.id}',this.value)">${Object.keys(ROLE).map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE[r]}</option>`).join("")}</select>
@@ -195,12 +195,12 @@ function qBlock(q) {
 function player() {
   const mine = S.answers.filter(a => a.uid === me.id && qOf(a.qid)), right = mine.filter(a => stat(a) === "ok").length;
   const wait = mine.filter(a => stat(a) === "pending").length;
-  const left = S.questions.filter(q => !mine.some(a => a.qid === q.id)).length;
+  const left = S.questions.filter(q => q.by !== me.id && !mine.some(a => a.qid === q.id)).length;
   return `<div class="card hero"><div class="coin"><b class="pts" data-v="${right}">${counted ? right : 0}</b></div>
     <div><h2 style="margin:0">Hi ${esc(me.name.split(" ")[0])}, you have ${right} point${right === 1 ? "" : "s"}</h2>
     <div class="stats" style="margin-top:12px"><div><b>${mine.length}</b><span class="muted">answered</span></div><div><b>${wait}</b><span class="muted">waiting for review</span></div><div><b>${left}</b><span class="muted">new to answer</span></div></div></div></div>
-    <div class="tabs"><button class="${tab === "new" ? "on" : ""}" onclick="setTab('new')">Answer questions</button><button class="${tab === "hist" ? "on" : ""}" onclick="setTab('hist')">My answers</button></div>
-    ${tab === "new" ? qCard() : hist()}${board()}`;
+    <div class="tabs"><button class="${tab === "new" ? "on" : ""}" onclick="setTab('new')">Answer questions</button><button class="${tab === "hist" ? "on" : ""}" onclick="setTab('hist')">My answers</button>${me.role === "questioner" ? `<button class="${tab === "mine" ? "on" : ""}" onclick="setTab('mine')">My questions</button>` : ""}</div>
+    ${tab === "mine" && me.role === "questioner" ? quest() : tab === "hist" ? hist() : qCard()}${board()}`;
 }
 function qCard() {
   if (last) return `<div class="card result"><h3>Answer submitted</h3><p class="muted">The questioner will review it. If your answer is marked correct, you get 1 point.</p><button class="btn" onclick="nextOne()">${nextQ() ? "Next question" : "Done"}</button></div>`;
@@ -242,7 +242,7 @@ async function login(e) {
     const n = $("#lu").value.trim().toLowerCase(), h = await hash($("#lp").value);
     const u = S.users.find(x => x.username.toLowerCase() === n && x.pass === h);
     if (!u) return toast(S.users.length ? "Wrong username or password." : "No users found. Check the database connection.");
-    me = u; ses.set("qa_uid", u.id); counted = false; render();
+    me = u; ses.set("qa_uid", u.id); counted = false; tab = u.role === "questioner" ? "mine" : "new"; render();
   } catch (err) { toast("Login error: " + err.message); }
 }
 function logout() { me = null; last = false; ses.del("qa_uid"); render(); }
@@ -302,13 +302,14 @@ function nextOne() { last = false; render(); }
   }
   const id = ses.get("qa_uid");
   me = S.users.find(u => u.id === id) || null;
+  tab = me && me.role === "questioner" ? "mine" : "new";
   counted = false; render();
   // pick up new questions without a page refresh
   setInterval(async () => {
     if (!me || busy) return;
-    const before = JSON.stringify(S), p0 = me.role === "player" ? points(me.id) : 0;
+    const before = JSON.stringify(S), p0 = me.role !== "admin" ? points(me.id) : 0;
     await load();
-    if (me.role === "player" && points(me.id) > p0) { toast("Your answer was marked correct! +1 point", true); burst(); counted = true; }
+    if (me.role !== "admin" && points(me.id) > p0) { toast("Your answer was marked correct! +1 point", true); burst(); counted = true; }
     if (JSON.stringify(S) !== before && !last && !document.activeElement.matches("input,textarea,select")) render();
   }, 6000);
 })();
